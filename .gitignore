@@ -1,0 +1,9 @@
+# Artefakty budowania
+.build/
+build/
+
+# Biblioteki firm trzecich pobierane przez scripts/fetch-vendor.sh (uruchamiane automatycznie przez build.sh)
+Resources/web/vendor/
+
+# macOS
+.DS_Store
