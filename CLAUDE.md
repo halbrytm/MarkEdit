@@ -73,14 +73,21 @@ JS/CSP złapane w stronie) i `ALL PASSED` / `N FAILED` na końcu. Testy zaczynaj
 zapisują PNG do katalogu podanego jako 4. argument (przydatne do wizualnej kontroli po większych
 zmianach UI — Read ten plik, nie zgaduj jak coś wygląda).
 
-**Sztuczki testowe, które zaoszczędzą Ci czasu (poznane boleśnie w tej sesji):**
+**Sztuczki testowe, które zaoszczędzą Ci czasu (poznane boleśnie w tej sesji — jedna z nich, „wywołaj
+handler bezpośrednio”, w pierwszej wersji faktycznie UKRYŁA prawdziwego buga, patrz niżej):**
 - **Nie symuluj prawdziwych klawiszy przez `KeyboardEvent` + `document.execCommand('insertText')`** —
   to NIE odwzorowuje wiernie natywnego `preventDefault`, więc dostajesz podwójne wstawienie znaku.
-  Żeby przetestować handler CodeMirrora bindowany na literał (np. `extraKeys["'*'"]`), **wywołaj go
-  bezpośrednio** jako funkcję (`cm.options.extraKeys["'*'"](cm)`) i sprawdzaj `cm.getValue()`/`getCursor()`.
-  To dokładnie ta sama funkcja, którą CodeMirror wywołuje po dopasowaniu klawisza.
-- Wbudowany dodatek `closebrackets` (nawiasy, cudzysłowy, backtick) trzyma SWÓJ keymap w
-  `cm.state.keyMaps[0]`, nie w `cm.options.extraKeys` — stąd `km["'\"'"](cm)` do testowania cudzysłowu.
+- **Nie testuj auto-domykania `* _ ~` wywołując handler bezpośrednio jako funkcję** — mechanizm żyje
+  w `cm.on('beforeChange', ...)` właśnie DLATEGO, że wiązanie na pojedynczy znak w `extraKeys` (co
+  było pierwszą wersją) okazało się niemiarodajne przy szybkim wpisywaniu, a bezpośrednie wywołanie
+  funkcji całkowicie omija ten problem, dając fałszywie zielone testy. Testuj przez
+  `cm.replaceSelection(ch)` BEZ podawania origin (domyślnie `'+input'`, jak prawdziwe wpisywanie) —
+  to faktycznie przechodzi przez `beforeChange`, więc wyłapie regresję, gdyby ktoś kiedyś cofnął to
+  z powrotem na `extraKeys`.
+- Wbudowany dodatek `closebrackets` (nawiasy, cudzysłowy, backtick — te NIE mają stanu jak `* _ ~`,
+  więc mogą zostać na character-keymap bez ryzyka) trzyma SWÓJ keymap w `cm.state.keyMaps[0]`, nie
+  w `cm.options.extraKeys` — stąd `km["'\"'"](cm)` do testowania cudzysłowu (to wywołanie bezpośrednie
+  jest tu OK, bo testujemy kod, który i tak nie ma problemu z niemiarodajnym keypress).
 - Do testowania przycisków paska formatowania: **dispatchuj prawdziwy `click()`** na
   `document.querySelector('[data-cmd="bold"]')` (to działa dobrze, w przeciwieństwie do klawiszy —
   `click` nie ma konkurencyjnej natywnej akcji do podrobienia). Funkcje typu `runToolbarCommand` żyją
@@ -92,7 +99,7 @@ zmianach UI — Read ten plik, nie zgaduj jak coś wygląda).
 - `grep`/`head` na `app.js` i `webtest.js` bez `-a` cichnie (pliki mają polskie znaki, część narzędzi
   klasyfikuje je jako "data"). Używaj `grep -a`.
 
-Przy każdej zmianie w `app.js` uruchom cały `tests/webtest.js` (34 testy) — pokrywa: render wstępny
+Przy każdej zmianie w `app.js` uruchom cały `tests/webtest.js` (42 testy) — pokrywa: render wstępny
 (frontmatter/GFM/math/mermaid/hljs), edycję w obu panelach z zachowaniem składni, przewijanie
 synchroniczne, konflikt/przeładowanie z dysku, cały toolbar (obie ścieżki: raw i preview) i cały
 mechanizm auto-domykania (sekwencja bold/italic, granica słowa, wykluczenie w kodzie/wzorach,
@@ -106,15 +113,33 @@ robi diff starych/nowych bloków po kluczu (treść źródła danego bloku) — 
 DOM (bez migotania, kursor przeżywa). Edycja podglądu (`syncFromPreview` → `computeSegments` →
 `toMarkdown` przez Turndown) zamienia na markdown TYLKO zmienione segmenty i podmienia w źródle
 wyłącznie ich zakres linii — reszta pliku bajt w bajt bez zmian. To jest serce całej apki; jeśli
-coś się psuje przy edycji, zacznij tutaj (`app.js:492-834`).
+coś się psuje przy edycji, zacznij tutaj (`app.js:497-838`).
 
-**Auto-domykanie `* _ ~`** (`app.js:359-491`) ma stan (`pendingExpand`) bo lokalny kontekst (znak
-przed/po kursorze) NIE wystarcza do odróżnienia „świeża para, urośnij do podwójnej” od „koniec
-istniejącej podwójnej pary, przeskocz” — oba wyglądają identycznie jako `X|X`. Jeśli dodajesz kolejny
-znak do tego mechanizmu, przeczytaj komentarz nad `smartPairChar` w całości, to jest zwodniczo proste
-na pierwszy rzut oka.
+**Auto-domykanie `* _ ~`** (`app.js:359-496`) przechwytuje wpisanie znaku na poziomie **`beforeChange`**,
+nie przez wiązanie na pojedynczy znak w `extraKeys` (`"'*'"`) — TO BYŁ BUG znaleziony przez użytkownika:
+takie wiązanie opiera się na zdarzeniu `keypress`, które przy szybkim, kolejnym wpisywaniu tego samego
+znaku bywa niemiarodajne (drugie naciśnięcie potrafi nie trafić w handler i przejść jako zwykłe,
+dosłowne wstawienie — patrz commit „Napraw niemiarodajne auto-domykanie…”). `beforeChange` odpala się
+na faktyczny efekt wpisania niezależnie od ścieżki klawiatury, więc jest tak samo pewne jak wbudowany
+`closebrackets` dla nawiasów. **Jeśli kiedyś zajdzie pokusa przepisania tego z powrotem na `extraKeys`
+character-binding (wygląda prościej) — nie rób tego, to dokładnie ten sam bug.**
 
-**Przewijanie synchroniczne** (`app.js:953-1025`) interpoluje między „kotwicami” (linia źródła ↔
+Mechanizm ma stan (`pendingExpand`) bo lokalny kontekst (znak przed/po kursorze) NIE wystarcza do
+odróżnienia „świeża para, urośnij do podwójnej” od „koniec istniejącej podwójnej pary, przeskocz” —
+oba wyglądają identycznie jako `X|X`. `pendingExpand` jest kasowany przy KAŻDEJ innej zmianie dokumentu
+(nie przez `cursorActivity`, które odpala się asynchronicznie i nie chroni przed tym samym problemem
+czasowania). Testy dla tego mechanizmu używają `cm.replaceSelection(ch)` BEZ podawania origin (domyślnie
+`'+input'`, jak prawdziwe wpisywanie) — **nigdy nie testuj tego wywołując handler bezpośrednio jako
+funkcję**, to nie przechodzi przez `beforeChange` i da fałszywe zielone testy (dokładnie tak umknął
+oryginalny bug).
+
+**Pojedynczy Enter w akapicie nie tworzy widocznego złamania linii w podglądzie — to jest celowe,
+zgodne ze standardem CommonMark** (miękkie złamanie = spacja; twarde wymaga dwóch spacji na końcu linii
+albo `\`). Użytkownik świadomie wybrał zostawić to zgodnie ze standardem (zamiast włączać opcję
+markdown-it `breaks: true`, która zmieniłaby to globalnie, ale też „pociachałaby” w podglądzie akapity
+ręcznie łamane na stałej szerokości). Nie „naprawiaj” tego bez pytania, jeśli temat wróci.
+
+**Przewijanie synchroniczne** (`app.js:958-1030`) interpoluje między „kotwicami” (linia źródła ↔
 pozycja Y w podglądzie) budowanymi z `data-src-line`/`data-rel` na elementach DOM, nie prostym
 procentem wysokości — bo bloki mają różne wysokości renderowane vs w tekście (np. duży wzór $$).
 
@@ -123,7 +148,7 @@ procentem wysokości — bo bloki mają różne wysokości renderowane vs w tek�
 zmiany → `conflictDiskText` ustawiony, autozapis WSTRZYMANY dopóki user nie rozwiąże (bank z przyciskami
 w JS, `app.showConflict`). Jeśli zmienił się a NIE mamy lokalnych zmian → ciche przeładowanie.
 
-**Toolbar** (`app.js:1073-1407`) ma dwie ścieżki na komendę: `rawCommand`/`previewCommand`, wybierane
+**Toolbar** (`app.js:1078-1412`) ma dwie ścieżki na komendę: `rawCommand`/`previewCommand`, wybierane
 przez `activePane` (aktualizowany na focus cm/preview, NIE to samo co `driver` używany do scrollsync).
 Link/Obraz/Tabela/Linia pozioma zawsze idą przez raw (potrzebują wpisywalnego tekstu — adres, komórki),
 `insertViaRaw` przełącza widok z powrotem na split jeśli byłeś w samym podglądzie.
