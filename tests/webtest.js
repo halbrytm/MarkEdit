@@ -237,36 +237,48 @@ window.tests = {
     return 'snapshot';
   },
 
-  // ── Auto-domykanie * _ ~ (wywołujemy handlery bezpośrednio: to dokładnie te funkcje, które
-  //    CodeMirror wywołuje po dopasowaniu klawisza; symulacja syntetycznych KeyboardEvent nie
-  //    odwzorowuje wiarygodnie natywnego preventDefault, więc nie nadaje się do tego testu). ──
+  // ── Auto-domykanie * _ ~ jest przechwytywane na poziomie beforeChange (patrz komentarz w app.js
+  //    nad `cm.on('beforeChange', ...)` — wiązanie na pojedynczy znak w extraKeys okazało się
+  //    niemiarodajne przy szybkim, kolejnym wpisywaniu tego samego znaku). Testujemy przez
+  //    `cm.replaceSelection(ch)` BEZ podawania origin — domyślnie dostaje '+input', dokładnie jak
+  //    prawdziwe wpisywanie — więc idzie przez ten sam pipeline beforeChange, a nie obok niego. ──
 
   async pairBoldItalicSequence() {
-    const star = cm.options.extraKeys["'*'"];
+    const type = (ch) => cm.replaceSelection(ch);
     const st = () => { const c = cm.getCursor(); return cm.getLine(c.line).slice(0, c.ch) + '|' + cm.getLine(c.line).slice(c.ch); };
     cm.setValue(''); cm.setCursor({ line: 0, ch: 0 });
-    star(cm); const s1 = st();
-    star(cm); const s2 = st();
-    cm.replaceSelection('T'); const s3 = st();
-    star(cm); const s4 = st();
-    star(cm); const s5 = st();
+    type('*'); const s1 = st();
+    type('*'); const s2 = st();
+    type('T'); const s3 = st();
+    type('*'); const s4 = st();
+    type('*'); const s5 = st();
     return check([
       [s1 === '*|*', '1. * -> *|* (było: ' + s1 + ')'],
-      [s2 === '**|**', '2. * -> **|** (było: ' + s2 + ')'],
+      [s2 === '**|**', '2. * -> **|** (było: ' + s2 + ') — dokładnie zgłoszony przez użytkownika przypadek szybkiego podwójnego wpisania *'],
       [s3 === '**T|**', 'wpisanie T -> **T|** (było: ' + s3 + ')'],
       [s4 === '**T*|*', '3. * przeskakuje -> **T*|* (było: ' + s4 + ')'],
       [s5 === '**T**|', '4. * przeskakuje -> **T**| (było: ' + s5 + ')'],
     ]);
   },
 
+  async pairUnderscoreAndTilde() {
+    const type = (ch) => cm.replaceSelection(ch);
+    cm.setValue(''); cm.setCursor({ line: 0, ch: 0 });
+    ['_', '_', 't', '_', '_'].forEach(type);
+    const u = cm.getValue();
+    cm.setValue(''); cm.setCursor({ line: 0, ch: 0 });
+    ['~', '~', 't', '~', '~'].forEach(type);
+    const t = cm.getValue();
+    return check([[u === '__t__', 'podkreślenie rozrasta się tak samo jak gwiazdka: ' + u], [t === '~~t~~', 'tylda rozrasta się tak samo: ' + t]]);
+  },
+
   async pairWordBoundary() {
-    const under = cm.options.extraKeys["'_'"];
-    const star = cm.options.extraKeys["'*'"];
+    const type = (ch) => cm.replaceSelection(ch);
     cm.setValue('snake_case_name'); cm.setCursor({ line: 0, ch: 5 });
-    under(cm);
+    type('_');
     const midWord = cm.getValue() === 'snake_case_name';
     cm.setValue('hello '); cm.setCursor({ line: 0, ch: 6 });
-    star(cm);
+    type('*');
     const afterSpace = cm.getValue() === 'hello **';
     return check([
       [midWord, 'brak parowania w środku słowa (snake_case_name)'],
@@ -275,7 +287,6 @@ window.tests = {
   },
 
   async pairSkipsCodeAndMath() {
-    const star = cm.options.extraKeys["'*'"];
     const at = (text, needle, offset) => {
       cm.setValue(text);
       const idx = text.indexOf(needle) + (offset || 0);
@@ -284,27 +295,39 @@ window.tests = {
       const ch = before.length - before.lastIndexOf('\n') - 1;
       cm.setCursor({ line, ch });
       const before2 = cm.getValue();
-      star(cm);
-      return cm.getValue() === before2;
+      cm.replaceSelection('*');
+      return cm.getValue() === before2.slice(0, idx) + '*' + before2.slice(idx);
     };
     return check([
-      [at('`code`', 'code', 2), 'bez zmian w kodzie w linii'],
-      [at('```\na*b\n```', 'a', 1), 'bez zmian w bloku kodu'],
-      [at('$a*b$', 'a', 1), 'bez zmian we wzorze $..$'],
-      [at('$$\na*b\n$$', 'a', 1), 'bez zmian we wzorze $$..$$'],
+      [at('`code`', 'code', 2), 'dosłowny * w kodzie w linii'],
+      [at('```\na*b\n```', 'a', 1), 'dosłowny * w bloku kodu'],
+      [at('$a*b$', 'a', 1), 'dosłowny * we wzorze $..$'],
+      [at('$$\na*b\n$$', 'a', 1), 'dosłowny * we wzorze $$..$$'],
     ]);
   },
 
+  async pairStaleExpandDoesNotCorrupt() {
+    // * -> *|* (pendingExpand ustawiony), wpisujemy coś INNEGO w to miejsce, wracamy kursorem
+    // dokładnie tam, gdzie było pendingExpand, i wpisujemy * ponownie — to NIE powinno być
+    // potraktowane jako kontynuacja (bo tekst się zmienił), inaczej „rozrośnie” niepasujący fragment.
+    const type = (ch) => cm.replaceSelection(ch);
+    cm.setValue(''); cm.setCursor({ line: 0, ch: 0 });
+    type('*');
+    cm.setCursor({ line: 0, ch: 1 });
+    type('X');
+    cm.setCursor({ line: 0, ch: 1 });
+    type('*');
+    return ok(cm.getValue() === '**X*', 'brak fałszywego rozrostu po edycji między parą: ' + JSON.stringify(cm.getValue()));
+  },
+
   async pairSelectionWrapAndBackspace() {
-    const star = cm.options.extraKeys["'*'"];
-    const bs = cm.options.extraKeys.Backspace;
     cm.setValue('hello world');
     cm.setSelection({ line: 0, ch: 0 }, { line: 0, ch: 5 });
-    star(cm);
+    cm.replaceSelection('*');
     const wrapped = cm.getValue() === '*hello* world' && cm.getSelection() === 'hello';
     cm.setValue(''); cm.setCursor({ line: 0, ch: 0 });
-    star(cm);
-    bs(cm);
+    cm.replaceSelection('*');
+    cm.options.extraKeys.Backspace(cm);
     return check([
       [wrapped, 'zaznaczenie owinięte gwiazdkami, zaznaczenie zachowane'],
       [cm.getValue() === '', 'backspace kasuje pustą parę naraz'],
