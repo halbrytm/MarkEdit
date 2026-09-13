@@ -99,7 +99,7 @@ handler bezpośrednio”, w pierwszej wersji faktycznie UKRYŁA prawdziwego buga
 - `grep`/`head` na `app.js` i `webtest.js` bez `-a` cichnie (pliki mają polskie znaki, część narzędzi
   klasyfikuje je jako "data"). Używaj `grep -a`.
 
-Przy każdej zmianie w `app.js` uruchom cały `tests/webtest.js` (42 testy) — pokrywa: render wstępny
+Przy każdej zmianie w `app.js` uruchom cały `tests/webtest.js` (45 testów) — pokrywa: render wstępny
 (frontmatter/GFM/math/mermaid/hljs), edycję w obu panelach z zachowaniem składni, przewijanie
 synchroniczne, konflikt/przeładowanie z dysku, cały toolbar (obie ścieżki: raw i preview) i cały
 mechanizm auto-domykania (sekwencja bold/italic, granica słowa, wykluczenie w kodzie/wzorach,
@@ -146,7 +146,11 @@ procentem wysokości — bo bloki mają różne wysokości renderowane vs w tek�
 **MarkdownDocument.swift**: dwa niezależne timery — poll dysku co 1s (`checkDisk`) i autozapis co 30s
 (`autosaveTick`, sam też wywołuje `checkDisk` najpierw). Jeśli plik zmienił się na dysku I mamy lokalne
 zmiany → `conflictDiskText` ustawiony, autozapis WSTRZYMANY dopóki user nie rozwiąże (bank z przyciskami
-w JS, `app.showConflict`). Jeśli zmienił się a NIE mamy lokalnych zmian → ciche przeładowanie.
+w JS, `app.showConflict`). Jeśli zmienił się a NIE mamy lokalnych zmian → prośba `app.reloadFromDisk` o przeładowanie.
+JS najpierw synchronizuje oczekujące zmiany podglądu i porównuje treść z oczekiwaną wersją Swift.
+Komunikat `diskReload` potwierdza przyjęcie wersji lub tworzy konflikt; autozapis czeka na odpowiedź.
+„Wczytaj z dysku” ponownie czyta plik, nie korzysta z kopii zapamiętanej w bannerze.
+Testy natywnej obsługi plików: `tests/documenttest/main.swift` (instrukcja uruchomienia w README).
 
 **Toolbar** (`app.js:1078-1412`) ma dwie ścieżki na komendę: `rawCommand`/`previewCommand`, wybierane
 przez `activePane` (aktualizowany na focus cm/preview, NIE to samo co `driver` używany do scrollsync).

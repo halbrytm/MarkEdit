@@ -89,6 +89,11 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSTool
             pendingCalls.removeAll()
             queued.forEach { evaluate($0.0, $0.1) }
             if let disk = doc?.conflictDiskText { showConflict(disk: disk) }
+        case "diskReload":
+            if let id = body["id"] as? String, let applied = body["applied"] as? Bool,
+               let text = body["text"] as? String {
+                doc?.finishDiskReload(id: id, applied: applied, currentText: text)
+            }
         case "change":
             if let text = body["text"] as? String { doc?.editorDidChange(text) }
         case "openLink":
@@ -113,6 +118,17 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSTool
         webView.callAsyncJavaScript(js, arguments: args, in: nil, in: .page) { result in
             if case .failure(let error) = result { NSLog("MarkEdit JS error: \(error)") }
         }
+    }
+
+    func requestDiskReload(_ text: String, expected: String, id: String) {
+        guard pageReady else {
+            doc?.finishDiskReload(id: id, applied: true, currentText: text)
+            return
+        }
+        webView.callAsyncJavaScript("app.reloadFromDisk(text, expected, id)",
+            arguments: ["text": text, "expected": expected, "id": id], in: nil, in: .page) { [weak self] result in
+                if case .failure = result { self?.doc?.cancelDiskReload() }
+            }
     }
 
     func pushText(_ text: String) {
@@ -269,6 +285,7 @@ final class EditorWindowController: NSWindowController, NSWindowDelegate, NSTool
 
     func webViewWebContentProcessDidTerminate(_ webView: WKWebView) {
         pageReady = false
+        doc?.cancelDiskReload()
         webView.reload()
     }
 

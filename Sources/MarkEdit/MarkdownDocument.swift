@@ -19,6 +19,15 @@ final class MarkdownDocument: NSDocument {
     private(set) var fileMissing = false
     private(set) var lastSaved: Date?
 
+    private struct PendingReload {
+        let id: UUID
+        let text: String
+        let mod: Date
+        let crlf: Bool
+        let bom: Bool
+    }
+    private var pendingReload: PendingReload?
+
     private var pollTimer: Timer?
     private var autosaveTimer: Timer?
 
@@ -40,6 +49,7 @@ final class MarkdownDocument: NSDocument {
         usesCRLF = decoded.crlf
         hasBOM = decoded.bom
         conflictDiskText = nil
+        pendingReload = nil
         editor?.pushText(text)      // przy „Przywróć zachowaną wersję”
         editor?.hideBanner()
     }
@@ -83,7 +93,7 @@ final class MarkdownDocument: NSDocument {
     /// Zamknięcie okna / wyjście z aplikacji: zapisz po cichu zamiast pytać (plik ma już ścieżkę).
     override func canClose(withDelegate delegate: Any, shouldClose shouldCloseSelector: Selector?,
                            contextInfo: UnsafeMutableRawPointer?) {
-        if isDocumentEdited, let url = fileURL, let type = fileType, conflictDiskText == nil, !fileMissing {
+        if isDocumentEdited, let url = fileURL, let type = fileType, pendingReload == nil, conflictDiskText == nil, !fileMissing {
             do {
                 try writeSafely(to: url, ofType: type, for: .saveOperation)
                 didWriteToDisk(text)
@@ -136,7 +146,7 @@ final class MarkdownDocument: NSDocument {
 
     private func autosaveTick() {
         checkDisk()
-        guard isDocumentEdited, fileURL != nil, conflictDiskText == nil, !fileMissing else { return }
+        guard isDocumentEdited, fileURL != nil, pendingReload == nil, conflictDiskText == nil, !fileMissing else { return }
         saveNow()
     }
 
@@ -146,7 +156,7 @@ final class MarkdownDocument: NSDocument {
     }
 
     func checkDisk() {
-        guard let url = fileURL, diskText != nil else { return }
+        guard pendingReload == nil, let url = fileURL, diskText != nil else { return }
         guard let mod = currentDiskModDate() else {
             if !fileMissing {
                 fileMissing = true
@@ -161,17 +171,23 @@ final class MarkdownDocument: NSDocument {
             editor?.hideBanner()
         }
         if mod == knownModDate { return }
-        knownModDate = mod
-
         guard let data = try? Data(contentsOf: url) else { return }
+        knownModDate = mod
         let disk = Self.decode(data)
         if disk.text == diskText {
             fileModificationDate = mod
             return
         }
         if !isDocumentEdited || text == disk.text {
-            adoptDisk(disk.text, mod: mod, crlf: disk.crlf, bom: disk.bom)
-            editor?.toast("Plik zmieniony na dysku — przeładowano")
+            // WebKit może mieć edycję, której most jeszcze nie przekazał do Swift.
+            // Dopiero odpowiedź edytora pozwala przyjąć wersję z dysku.
+            let reload = PendingReload(id: UUID(), text: disk.text, mod: mod, crlf: disk.crlf, bom: disk.bom)
+            pendingReload = reload
+            if let editor {
+                editor.requestDiskReload(disk.text, expected: text, id: reload.id.uuidString)
+            } else {
+                finishDiskReload(id: reload.id.uuidString, applied: true, currentText: disk.text)
+            }
         } else {
             conflictDiskText = disk.text
             editor?.showConflict(disk: disk.text)
@@ -179,7 +195,26 @@ final class MarkdownDocument: NSDocument {
         }
     }
 
-    private func adoptDisk(_ disk: String, mod: Date?, crlf: Bool, bom: Bool) {
+    func cancelDiskReload() {
+        pendingReload = nil
+        knownModDate = nil
+    }
+
+    func finishDiskReload(id: String, applied: Bool, currentText: String) {
+        guard let reload = pendingReload, reload.id.uuidString == id else { return }
+        pendingReload = nil
+        if applied {
+            adoptDisk(reload.text, mod: reload.mod, crlf: reload.crlf, bom: reload.bom, push: false)
+            editor?.toast("Plik zmieniony na dysku — przeładowano")
+        } else {
+            editorDidChange(currentText)
+            conflictDiskText = reload.text
+            editor?.showConflict(disk: reload.text)
+            editor?.refreshStatus()
+        }
+    }
+
+    private func adoptDisk(_ disk: String, mod: Date?, crlf: Bool, bom: Bool, push: Bool = true) {
         text = disk
         diskText = disk
         usesCRLF = crlf
@@ -188,23 +223,32 @@ final class MarkdownDocument: NSDocument {
         knownModDate = mod
         conflictDiskText = nil
         updateChangeCount(.changeCleared)
-        editor?.pushText(disk)
+        if push { editor?.pushText(disk) }
         editor?.hideBanner()
         editor?.refreshStatus()
     }
 
     func resolveConflict(keepMine: Bool) {
-        guard let disk = conflictDiskText else { return }
+        guard conflictDiskText != nil, let url = fileURL else { return }
+        // Data i treść muszą dotyczyć tego samego odczytu, a nie starego bannera.
         let mod = currentDiskModDate()
+        let disk: (text: String, crlf: Bool, bom: Bool)
+        do {
+            disk = Self.decode(try Data(contentsOf: url))
+        } catch {
+            checkDisk()
+            presentError(error)
+            return
+        }
         if keepMine {
             conflictDiskText = nil
-            diskText = disk
+            diskText = disk.text
             fileModificationDate = mod
             knownModDate = mod
             editor?.hideBanner()
             saveNow()
         } else {
-            adoptDisk(disk, mod: mod, crlf: usesCRLF, bom: hasBOM)
+            adoptDisk(disk.text, mod: mod, crlf: disk.crlf, bom: disk.bom)
         }
     }
 

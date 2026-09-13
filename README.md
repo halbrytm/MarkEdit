@@ -36,3 +36,14 @@ Z terminala: `open -a MarkEdit plik.md`
 - `scripts/make_icon.swift`: generator ikony
 - `tests/`: testy edytora na silniku WebKit:
   `swiftc -O tests/webtest.swift -o build/webtest && build/webtest Resources/web tests/webtest.js Resources/web/demo.md /tmp`
+
+Testy obsługi plików i konfliktów (bez uruchamiania okna):
+
+```sh
+swiftc Sources/MarkEdit/MarkdownDocument.swift tests/documenttest/main.swift -o /tmp/markedit-documenttest
+/tmp/markedit-documenttest
+```
+
+Automatyczne przeładowanie wymaga potwierdzenia edytora, że nie ma oczekujących lokalnych zmian.
+Wybór „Wczytaj z dysku” odczytuje aktualną zawartość pliku, wraz z formatem końców linii i BOM.
+Harness WebKit zwraca błąd także przy błędach JS/CSP i pustej lub niepoprawnej liście testów.

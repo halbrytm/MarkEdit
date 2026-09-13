@@ -182,6 +182,46 @@ window.tests = {
     return ok(/\*\*\s?pogrubione\*\*/.test(src()), 'bold: ' + JSON.stringify(src().split('\n').find((l) => l.includes('pogrubione'))));
   },
 
+  async reloadPreservesPendingPreviewEdit() {
+    const saved = src();
+    app.load('Oryginał');
+    await frame(); await frame();
+    caretAtEnd(preview.querySelector('p'));
+    document.execCommand('insertText', false, ' lokalnie');
+    preview.dispatchEvent(new InputEvent('input', { bubbles: true }));
+    const applied = app.reloadFromDisk('Wersja agenta', 'Oryginał', 'test-preview');
+    const result = check([
+      [applied === false, 'przeładowanie odrzucone'],
+      [src().includes('lokalnie'), 'niezakończona edycja zachowana'],
+    ]);
+    app.load(saved);
+    await frame(); await frame();
+    return result;
+  },
+
+  async reloadPreservesNewRawEdit() {
+    const saved = src();
+    app.load('Oryginał');
+    cm.replaceRange(' lokalnie', { line: 0, ch: 8 });
+    const applied = app.reloadFromDisk('Wersja agenta', 'Oryginał', 'test-raw');
+    const result = check([
+      [applied === false, 'odrzucono nieaktualny stan Swift'],
+      [src().includes('lokalnie'), 'edycja źródła zachowana'],
+    ]);
+    app.load(saved);
+    await frame(); await frame();
+    return result;
+  },
+
+  async reloadAcceptsUnchangedEditor() {
+    const saved = src();
+    const applied = app.reloadFromDisk('Wersja agenta', saved, 'test-clean');
+    const result = check([[applied === true, 'przeładowanie przyjęte'], [src() === 'Wersja agenta', 'nowa treść']]);
+    app.load(saved);
+    await frame(); await frame();
+    return result;
+  },
+
   async externalReload() {
     const cur = src();
     cm.setCursor({ line: 3, ch: 2 });

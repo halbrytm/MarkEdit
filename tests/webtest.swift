@@ -68,8 +68,13 @@ final class Runner: NSObject, WKScriptMessageHandler {
 
     @MainActor func run() async {
         _ = await js("app.init(t, 'split', true)", ["t": demo])
-        _ = await js(testJS)
+        let loaded = await js(testJS)
+        if let error = loaded as? String, error.hasPrefix("JS EXCEPTION") {
+            print(error)
+            exit(1)
+        }
         let names = (await js("return Object.keys(window.tests)") as? [String]) ?? []
+        guard !names.isEmpty else { print("FAIL: brak scenariuszy testowych"); exit(1) }
         var failed = 0
         for name in names {
             let r = await js("return await window.tests[n]()", ["n": name])
@@ -78,7 +83,8 @@ final class Runner: NSObject, WKScriptMessageHandler {
             print("[\(name)] \(s)")
             if name.hasPrefix("snap") { await snap(name) }
         }
-        let errs = await js("return window.__errors.join('\\n')") as? String ?? ""
+        let errs = await js("return window.__errors.join('\\n')") as? String ?? "Nie udało się odczytać błędów JS"
+        if !errs.isEmpty { failed += 1 }
         print("JS errors: \(errs.isEmpty ? "none" : errs)")
         print("bridge change messages: \(changes)")
         print(failed == 0 ? "ALL PASSED" : "\(failed) FAILED")
